@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import productRoutes from  './routes/productsRoutes.js'
 import { authenticateTokenBlacklist } from './middleware/tokenBlacklist.js';
 
 dotenv.config();
@@ -19,6 +20,7 @@ app.use(authenticateTokenBlacklist);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/products', productRoutes);
 
 app.get('/', (req, res) => {
     res.send("Hello");

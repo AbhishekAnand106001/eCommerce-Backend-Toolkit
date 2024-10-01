@@ -22,3 +22,12 @@ export const authenticateToken = async (req, res, next) => {
         res.status(400).json({ message: "Invalid token" });
     }
 };
+
+export const isAdmin = (req, res, next) => {
+    // Assuming user information is available in req.user from previous authentication middleware
+    if (req.user && req.user.role === 'admin') {
+        next();
+    } else {
+        res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+};
