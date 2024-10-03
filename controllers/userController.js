@@ -1,136 +1,81 @@
 import User from '../models/User.js';
+import redisClient from '../config/redisClient.js';
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { blacklistToken } from '../middleware/tokenBlacklist.js';
 
-const JWT_SECRET = process.env.JWT_SECRET;
+// Helper function to get user from database
+const getUserFromDB = async (userId) => {
+    const user = await User.findById(userId).select('-password');
+    return user;
+};
 
-export const signUp = async (req, res) => {
+// GET User Profile
+export const getUserProfile = async (req, res) => {
+    const userId = req.user._id;
+    const cacheKey = `user:${userId}`;
+
     try {
-        const { name, email, password } = req.body;
+        // Check Redis cache for user profile
+        const cachedUser = await redisClient.get(cacheKey);
 
-        if (!name || !email || !password) {
-            return res.status(400).json({ message: "Name, email, and password are required" });
+        if (cachedUser) {
+            return res.status(200).json({
+                message: 'Profile from cache',
+                user: JSON.parse(cachedUser),
+            });
         }
 
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(409).json({ message: "Email is already registered" });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        const newUser = new User({ name, email, password: hashedPassword });
-        const savedUser = await newUser.save();
-
-        const token = jwt.sign(
-            { userId: savedUser._id, email: savedUser.email },
-            JWT_SECRET,
-            { expiresIn: '1h' }
-        );
-
-        res.status(201).json({
-            message: "User registered successfully",
-            token,
-            user: {
-                id: savedUser._id,
-                name: savedUser.name,
-                email: savedUser.email,
-            }
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Internal server error" });
-    }
-};
-
-export const signIn = async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(400).json({ message: "Email and password are required" });
-        }
-
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(401).json({ message: "Invalid email or password" });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ message: "Invalid email or password" });
-        }
-
-        const token = jwt.sign(
-            { userId: user._id, email: user.email },
-            JWT_SECRET,
-            { expiresIn: '1h' }
-        );
-
-        res.status(200).json({
-            message: "Sign-in successful",
-            token,
-            user: {
-                id: user._id,
-                email: user.email,
-                name: user.name,
-            }
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Internal server error" });
-    }
-};
-
-export const logout = (req, res) => {
-    const token = req.headers['authorization']?.split(' ')[1];
-
-    if (!token) {
-        return res.status(400).json({ message: 'Token not provided' });
-    }
-
-    blacklistToken(token);
-
-    res.status(200).json({ message: 'Logged out successfully' });
-};
-
-export const getUserProfile = (req, res) => {
-    res.json({
-        message: "User profile retrieved successfully",
-        user: req.user,
-    });
-};
-
-export const updateUserProfile = async (req, res) => {
-    try {
-        const { userId, name, email, password } = req.body;
-
-        const user = await User.findById(userId);
+        // If not in cache, fetch from database
+        const user = await getUserFromDB(userId);
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        // Cache the user profile
+        await redisClient.setEx(cacheKey, 3600, JSON.stringify(user));
+
+        res.status(200).json({
+            message: 'Profile from DB',
+            user,
+        });
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// Update User Profile
+export const updateUserProfile = async (req, res) => {
+    const { name, email, password } = req.body;
+    const userId = req.user._id;
+
+    try {
         const updatedFields = { name, email };
+
+        // If password is provided, hash it before saving
         if (password) {
-            const saltRounds = 10;
-            const hashedPassword = await bcrypt.hash(password, saltRounds);
-            updatedFields.password = hashedPassword;
+            updatedFields.password = await bcrypt.hash(password, 10);
         }
 
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             updatedFields,
-            { new: true, runValidators: true }
+            { new: true, runValidators: true } // Ensure updated fields are validated
         );
 
+        // If user not found
         if (!updatedUser) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const { password: _, ...userWithoutPassword } = updatedUser.toObject();
-        res.json(userWithoutPassword);
+        // Invalidate the cache for the updated user
+        await redisClient.del(`user:${userId}`);
+
+        res.status(200).json({
+            message: 'Profile updated successfully',
+            user: updatedUser,
+        });
     } catch (error) {
-        res.status(500).json({ message: 'Server Error', error });
+        console.error('Error updating user profile:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
